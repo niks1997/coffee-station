@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Print styles for receipt */
+@media print {
+  body { background: #fff; }
+  .no-print { display: none !important; }
+  .receipt { box-shadow: none !important; border: none !important; }
+}
