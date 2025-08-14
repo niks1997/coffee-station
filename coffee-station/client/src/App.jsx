@@ -94,7 +94,7 @@ export default function App() {
     setSummaryModalVisible(false);
 
     try {
-      const API = import.meta.env.VITE_API_URL || "http://localhost:5000";
+      const API = import.meta.env.VITE_API_URL || "https://coffee-station-4ant.onrender.com/";
       const res = await fetch(`${API}/new-order`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
