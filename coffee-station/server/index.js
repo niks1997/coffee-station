@@ -1,82 +1,66 @@
 import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
-import twilio from 'twilio';
-import bodyParser from 'body-parser';
-import dotenv from 'dotenv';
 import cors from 'cors';
-
-import adminRoutes, { getOrdersStore } from './routes/admin.js';
-import adminAuth from './utils/adminAuth.js';
-
+import twilio from 'twilio';
+import dotenv from 'dotenv';
 dotenv.config();
 
 const app = express();
-app.use(cors({ origin: '*' })); // dev only
-app.use(express.json()); // parse JSON
-app.use(bodyParser.json()); // extra parsing (optional)
+app.use(express.json());
+
+// Allow your deployed frontend(s)
+const allowed = (process.env.CORS_ORIGIN || '').split(',').filter(Boolean);
+app.use(cors({ origin: allowed.length ? allowed : true }));
 
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*' } });
+const io = new Server(server, {
+  cors: { origin: allowed.length ? allowed : true, methods: ['GET','POST'] }
+});
 
-// Socket namespace for admin dashboard
-const adminNs = io.of('/admin');
-adminNs.on('connection', (socket) => {
+// Toggle WhatsApp sending
+const SEND_WA = (process.env.SEND_WHATSAPP_RECEIPT || 'false') === 'true';
+
+const twilioClient = twilio(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN
+);
+
+io.on('connection', (socket) => {
   console.log('Admin connected:', socket.id);
 });
 
-// Twilio client
-const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+app.get('/health', (_, res) => res.json({ ok: true }));
 
-// Protect all admin APIs with token
-app.use('/api/admin', adminAuth, adminRoutes);
-
-// Receive new orders from customer app
 app.post('/new-order', async (req, res) => {
   const order = req.body;
 
-  // default server-side fields
-  order.status = order.status || 'PENDING';
-  order.createdAt = order.createdAt || new Date().toISOString();
-  order.updatedAt = order.updatedAt || order.createdAt;
+  // 1) Notify admins in real time
+  io.emit('order-received', order);
 
-  // store in memory (swap with DB if needed)
-  const store = getOrdersStore();
-  store.push(order);
+  // 2) (Optional) Send WhatsApp receipt
+  if (SEND_WA) {
+    try {
+      let msg = `*Coffee Station Receipt*\n\n`;
+      msg += `*${order.orderType === 'inside' ? 'Table' : 'Vehicle'}:* ${order.details}\n`;
+      msg += `*Phone:* ${order.phone}\n*Order ID:* ${order.id}\n\n*Items:*\n`;
+      order.cart.forEach(i => { msg += `${i.name} x${i.qty} - ₹${(i.price*i.qty).toFixed(2)}\n`; });
+      msg += `\n*Subtotal:* ₹${order.subtotal.toFixed(2)}\n*GST (18%):* ₹${order.gst.toFixed(2)}\n*Total:* ₹${order.total.toFixed(2)}\n*Payment:* ${order.payment.method}`;
 
-  // realtime push to admins
-  adminNs.emit('order-received', order);
-
-  // Try to send WhatsApp receipt but don't block order placement
-  try {
-    let message = `*Coffee Station Receipt*\n\n`;
-    message += `*${order.orderType === 'inside' ? 'Table' : 'Vehicle'}:* ${order.details}\n`;
-    message += `*Phone:* ${order.phone}\n`;
-    message += `*Order ID:* ${order.id}\n\n`;
-    message += `*Items:*\n`;
-    order.cart.forEach(item => {
-      message += `${item.name} x${item.qty} - ₹${(item.price * item.qty).toFixed(2)}\n`;
-    });
-    message += `\n*Subtotal:* ₹${order.subtotal.toFixed(2)}`;
-    message += `\n*GST(18%):* ₹${order.gst.toFixed(2)}`;
-    message += `\n*Total:* ₹${order.total.toFixed(2)}`;
-    message += `\n*Payment:* ${order.payment.method}`;
-
-    await twilioClient.messages.create({
-      from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`, // e.g. +14155238886 in .env
-      to: `whatsapp:${order.phone}`,
-      body: message
-    });
-
-    console.log(`WhatsApp receipt sent to ${order.phone}`);
-  } catch (err) {
-    console.warn("Twilio WhatsApp error:", err.message);
+      await twilioClient.messages.create({
+        from: process.env.TWILIO_WHATSAPP_NUMBER,   // e.g. "whatsapp:+14155238886"
+        to: `whatsapp:${order.phone}`,              // e.g. "+91xxxxxxxxxx"
+        body: msg
+      });
+    } catch (e) {
+      console.error('WhatsApp send failed:', e.message);
+    }
+  } else {
+    console.log('WhatsApp sending disabled (SEND_WHATSAPP_RECEIPT=false).');
   }
 
-  // Always respond success so frontend doesn't show popup
   res.json({ success: true });
 });
 
-server.listen(process.env.PORT || 5000, () =>
-  console.log(`Server running on port ${process.env.PORT || 5000}`)
-);
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => console.log('Server listening on', PORT));
