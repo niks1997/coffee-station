@@ -100,41 +100,58 @@ export default function App() {
 }
 
   // Updated payment handler from summary
-  async function handlePaymentSelect(method) {
-  const subtotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
-  const gst = subtotal * 0.18;
-  const total = subtotal + gst;
+   async function handlePaymentSelect(method) {
+    const subtotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+    const gst = subtotal * 0.18;
+    const total = subtotal + gst;
 
-  const newOrder = {
-    id: Date.now(),
-    cart,
-    subtotal,
-    gst,
-    total,
-    orderType,
-    details,
-    phone,
-    payment: { method, status: 'Success' },
-    placedAt: new Date().toISOString()
-  };
+    const newOrder = {
+      id: Date.now(),
+      cart,
+      subtotal,
+      gst,
+      total,
+      orderType,
+      details,
+      phone, // Make sure this is E.164: +91XXXXXXXXXX
+      payment: { method, status: 'Success' },
+      placedAt: new Date().toISOString()
+    };
 
-  setConfirmedOrder(newOrder);
-  setCart([]);
-  setSummaryModalVisible(false);
+    setConfirmedOrder(newOrder);
+    setCart([]);
+    setSummaryModalVisible(false);
 
-  // Send order to backend for WhatsApp + admin
-  try {
-    await fetch('http://localhost:5000/new-order', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newOrder)
-    });
-    alert('Order placed! Receipt sent via WhatsApp.');
-  } catch (err) {
-    console.error(err);
-    alert('Failed to place order');
+    try {
+      const API = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+      const res = await fetch(`${API}/new-order`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newOrder)
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        console.error('Order POST failed', data);
+        alert(`Failed to place order: ${data?.error || res.status}`);
+        return;
+      }
+
+      // Success (even if WhatsApp failed, the order is stored/emitted)
+      if (data.whatsappSent) {
+        console.log('Order placed! Receipt sent via WhatsApp.');
+      } else if (data.reason === 'WhatsApp disabled') {
+        console.log('Order placed! (WhatsApp sending is disabled on server.)');
+      } else {
+        console.log('Order placed! (WhatsApp failed to send; check server logs.)');
+      }
+    } catch (err) {
+      console.error(err);
+      console.log('Failed to place order (network error). Make sure the server is running and CORS is allowed.');
+    }
   }
-}
+
 
   if (confirmedOrder) {
     return (
